@@ -45,13 +45,13 @@ func (self Pipe) right() int16 {
 	return max(self.fromPos, self.toPos)
 }
 
-func RenderCommitGraph(commits []*models.Commit, selectedCommitHashPtr *string, getStyle func(c *models.Commit) *style.TextStyle) []string {
+func RenderCommitGraph(commits []*models.Commit, selectedCommitHashPtr *string, getStyle func(c *models.Commit) *style.TextStyle, symbolSet SymbolSet) []string {
 	pipeSets := GetPipeSets(commits, getStyle)
 	if len(pipeSets) == 0 {
 		return nil
 	}
 
-	lines := RenderAux(pipeSets, commits, selectedCommitHashPtr)
+	lines := RenderAux(pipeSets, commits, selectedCommitHashPtr, symbolSet)
 
 	return lines
 }
@@ -69,7 +69,7 @@ func GetPipeSets(commits []*models.Commit, getStyle func(c *models.Commit) *styl
 	})
 }
 
-func RenderAux(pipeSets [][]Pipe, commits []*models.Commit, selectedCommitHashPtr *string) []string {
+func RenderAux(pipeSets [][]Pipe, commits []*models.Commit, selectedCommitHashPtr *string, symbolSet SymbolSet) []string {
 	maxProcs := runtime.GOMAXPROCS(0)
 
 	// splitting up the rendering of the graph into multiple goroutines allows us to render the graph in parallel
@@ -93,7 +93,7 @@ func RenderAux(pipeSets [][]Pipe, commits []*models.Commit, selectedCommitHashPt
 				if k > 0 {
 					prevCommit = commits[k-1]
 				}
-				line := renderPipeSet(pipeSet, selectedCommitHashPtr, prevCommit)
+				line := renderPipeSet(pipeSet, selectedCommitHashPtr, prevCommit, symbolSet)
 				innerLines = append(innerLines, line)
 			}
 			chunks[i] = innerLines
@@ -275,6 +275,7 @@ func renderPipeSet(
 	pipes []Pipe,
 	selectedCommitHashPtr *string,
 	prevCommit *models.Commit,
+	symbolSet SymbolSet,
 ) string {
 	maxPos := int16(0)
 	commitPos := int16(0)
@@ -344,23 +345,41 @@ func renderPipeSet(
 	})
 
 	for _, pipe := range nonSelectedPipes {
-		// a new line that starts in the column of a child's line ending here
-		// would continue that line straight down, so it only appears from the
-		// next row on
-		if pipe.kind == STARTS && !endingColumns[pipe.toPos] {
+		// With the box drawing characters, a new line that starts in the column
+		// of a child's line ending here would continue that line straight down,
+		// so it only appears from the next row on. The branch drawing symbols
+		// can show both lines in one cell.
+		if pipe.kind == STARTS && !(symbolSet == BoxDrawingSymbols && endingColumns[pipe.toPos]) {
 			renderPipe(&pipe, pipe.style, true)
 		}
 	}
 
 	for _, pipe := range nonSelectedPipes {
-		if pipe.kind != STARTS && !(pipe.kind == TERMINATES && pipe.fromPos == commitPos && pipe.toPos == commitPos) {
-			renderPipe(&pipe, pipe.style, false)
+		if pipe.kind == STARTS {
+			continue
 		}
+		if pipe.kind == TERMINATES && pipe.fromPos == commitPos && pipe.toPos == commitPos {
+			// Record this line without drawing it, so that the commit symbol
+			// keeps the style of the commit itself. The branch drawing commit
+			// symbols connect to it. The pipe from above the first commit
+			// doesn't come from a commit, so it has no line.
+			if !equalHashes(pipe.fromHash, &StartCommitHash) {
+				cells[commitPos].up = straightLine
+			}
+			continue
+		}
+		renderPipe(&pipe, pipe.style, false)
 	}
 
-	for _, pipe := range selectedPipes {
-		for i := pipe.left(); i <= pipe.right(); i++ {
-			cells[i].reset()
+	// Box drawing characters can't show every combination of lines in a cell,
+	// so the cells that the selected commit's lines run through show only
+	// those lines. The branch drawing symbols can, so they keep the other
+	// lines too.
+	if symbolSet == BoxDrawingSymbols {
+		for _, pipe := range selectedPipes {
+			for i := pipe.left(); i <= pipe.right(); i++ {
+				cells[i].reset()
+			}
 		}
 	}
 	for _, pipe := range selectedPipes {
@@ -370,7 +389,35 @@ func renderPipeSet(
 		}
 	}
 
-	separateUnrelatedLines(cells, pipes, commitPos, endingColumns)
+	// The branch drawing symbols show where unrelated lines meet, so only the
+	// box drawing characters need them kept apart
+	if symbolSet == BoxDrawingSymbols {
+		separateUnrelatedLines(cells, pipes, commitPos, endingColumns)
+	}
+
+	// The pipe from a root commit to the empty tree gives the commit symbol the
+	// style of the commit, but there is no line below a root commit
+	for _, pipe := range pipes {
+		if pipe.kind == STARTS && equalHashes(pipe.toHash, &EmptyTreeCommitHash) {
+			cells[pipe.toPos].down = noLine
+		}
+	}
+
+	// Where a line of the selected commit crosses the vertical line of another
+	// commit, draw it over that line, so that it reads as one line. The
+	// vertical line visibly continues above and below. A vertical line in a
+	// cell that doesn't have the highlight style belongs to another commit.
+	if symbolSet == BranchDrawingSymbols {
+		for _, pipe := range selectedPipes {
+			for i := pipe.left() + 1; i < pipe.right(); i++ {
+				cell := cells[i]
+				if cell.up == straightLine && cell.down == straightLine && cell.style != &highlightStyle {
+					cell.horizontalOnTop = true
+					cell.style = &highlightStyle
+				}
+			}
+		}
+	}
 
 	cType := COMMIT
 	if isMerge {
@@ -383,7 +430,7 @@ func renderPipeSet(
 	writer := &strings.Builder{}
 	writer.Grow(len(cells) * 2)
 	for _, cell := range cells {
-		cell.render(writer)
+		cell.render(writer, symbolSet)
 	}
 	return writer.String()
 }
