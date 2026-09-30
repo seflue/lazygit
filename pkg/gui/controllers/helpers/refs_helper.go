@@ -301,41 +301,6 @@ func (self *RefsHelper) CreateGitResetMenu(name string, ref string) error {
 	})
 }
 
-func (self *RefsHelper) CreateCheckoutMenu(commit *models.Commit) error {
-	branches := lo.Filter(self.c.Model().Branches, func(branch *models.Branch, _ int) bool {
-		return commit.Hash() == branch.CommitHash && branch.Name != self.c.Model().CheckedOutBranch
-	})
-
-	hash := commit.Hash()
-
-	detachedHeadItem := &types.MenuItem{
-		LabelColumns: []string{fmt.Sprintf(self.c.Tr.Actions.CheckoutCommitAsDetachedHead, utils.ShortHash(hash))},
-		OnPress: func() error {
-			self.c.LogAction(self.c.Tr.Actions.CheckoutCommit)
-			return self.CheckoutRef(hash, types.CheckoutRefOptions{})
-		},
-		Keys: menuKey('d'),
-	}
-
-	branchItems := self.MenuItemsForBranchesAtCommit(
-		branches,
-		self.c.Tr.Actions.CheckoutBranch,
-		self.c.Tr.NoBranchesFoundAtCommitTooltip,
-		func(branch *models.Branch) string {
-			return fmt.Sprintf(self.c.Tr.Actions.CheckoutBranchAtCommit, branch.Name)
-		},
-		func(branch *models.Branch) error {
-			self.c.LogAction(self.c.Tr.Actions.CheckoutBranch)
-			return self.CheckoutRef(branch.RefName(), types.CheckoutRefOptions{})
-		},
-	)
-
-	return self.c.Menu(types.CreateMenuOptions{
-		Title: self.c.Tr.Actions.CheckoutBranchOrCommit,
-		Items: append([]*types.MenuItem{detachedHeadItem}, branchItems...),
-	})
-}
-
 // With no branches, returns a single disabled placeholder item so the menu
 // still has an entry to explain why nothing is selectable.
 func (self *RefsHelper) MenuItemsForBranchesAtCommit(

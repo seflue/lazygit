@@ -247,6 +247,15 @@ func ShortBranchName(fullBranchName string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(fullBranchName, "refs/heads/"), "refs/remotes/")
 }
 
+func (self *BranchesHelper) CheckoutBranch(branch *models.Branch, contextKeyAfterWorktreeSwitch types.ContextKey) error {
+	if worktree, ok := self.worktreeForBranch(branch); ok && !worktree.IsCurrent {
+		return self.worktreeHelper.PromptToSwitchToWorktree(worktree, contextKeyAfterWorktreeSwitch)
+	}
+
+	self.c.LogAction(self.c.Tr.Actions.CheckoutBranch)
+	return self.refsHelper.CheckoutRef(branch.Name, types.CheckoutRefOptions{})
+}
+
 func (self *BranchesHelper) checkedOutByOtherWorktree(branch *models.Branch) bool {
 	return git_commands.CheckedOutByOtherWorktree(branch, self.c.Model().Worktrees)
 }
